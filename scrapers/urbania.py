@@ -1,25 +1,27 @@
 import re
-import time
+import os 
 import requests
 from typing import Optional
 import pandas as pd
 from bs4 import BeautifulSoup
 
-# Imports locales desde el módulo 'common'
 from .common import (
-    create_driver,
     slugify_zone,
-    WebDriverWait,
-    By,
-    EC
 )
+
+SCRAPINGBEE_API_URL = "https://api.scrapingbee.com/v1/"
+API_KEY = os.environ.get("SCRAPINGBEE_API_KEY")
 
 # -------------------- Urbania --------------------
 def scrape_urbania(zona: str = "", dormitorios: str = "0", banos: str = "0",
                      price_min: Optional[int] = None, price_max: Optional[int] = None,
-                     palabras_clave: str = "", max_pages: int = 6, wait_time: float = 1.5):
+                     palabras_clave: str = "", max_pages: int = 6, **kwargs): # Eliminamos wait_time ya que no es necesario
+    
+    if not API_KEY:
+        print("❌ Error: Variable de entorno SCRAPINGBEE_API_KEY no encontrada.")
+        return pd.DataFrame()
+        
     zona = (zona or "").strip()
-    # construir keyword combinando filtros (si el usuario solo pone keyword, la usamos)
     kw_parts = []
     if palabras_clave and palabras_clave.strip():
         kw_parts.append(palabras_clave.strip())
@@ -28,12 +30,13 @@ def scrape_urbania(zona: str = "", dormitorios: str = "0", banos: str = "0",
     if banos and str(banos) != "0":
         kw_parts.append(f"{banos} banos")
     keyword_value = " ".join(kw_parts).strip()
-    # CAMBIO CLAVE: Siempre usar la zona si está especificada, independientemente de las keywords
+    
+    # --- Construcción de la URL de Urbania ---
     if zona:
         # Mapeo específico para Urbania
         ZONA_MAPEO_URBANIA = {
             "ancón": "ancon",
-            "ate": "ate-vitarte",  # Usar ate-vitarte como fallback
+            "ate": "ate-vitarte",
             "barranco": "barranco",
             "breña": "brena",
             "carabayllo": "carabayllo",
@@ -81,111 +84,126 @@ def scrape_urbania(zona: str = "", dormitorios: str = "0", banos: str = "0",
         base = f"https://urbania.pe/buscar/alquiler-de-departamentos-en-{zone_slug}--lima--lima"
     else:
         base = "https://urbania.pe/buscar/alquiler-de-departamentos"
-    params = []
+        
+    params_urbania = []
     if keyword_value:
-        params.append(f"keyword={requests.utils.quote(keyword_value)}")
+        params_urbania.append(f"keyword={requests.utils.quote(keyword_value)}")
     if price_min is not None:
-        params.append(f"priceMin={price_min}")
+        params_urbania.append(f"priceMin={price_min}")
     if price_max is not None:
-        params.append(f"priceMax={price_max}")
+        params_urbania.append(f"priceMax={price_max}")
     if dormitorios and dormitorios != "0":
-        params.append(f"bedroomMin={dormitorios}")
+        params_urbania.append(f"bedroomMin={dormitorios}")
     if banos and banos != "0":
-        params.append(f"bathroomMin={banos}")
+        params_urbania.append(f"bathroomMin={banos}")
     if price_min is not None or price_max is not None:
-        params.append("currencyId=6")  # Soles
-    url = base + ("?" + "&".join(params) if params else "")
-    print(f"URL de Urbania: {url}")  # Mostrar URL usada
-    driver = create_driver(headless=True)
-    results = []
+        params_urbania.append("currencyId=6") 
+        
+    # Urbania soporta paginación por la URL
+    all_results = []
     seen = set()
-    try:
-        driver.get(url)
-        # esperar unos segundos por elementos representativos (no bloquear si timeout)
+    
+    for page_num in range(1, max_pages + 1):
+        # 1. Construir la URL completa de Urbania con paginación
+        current_params = params_urbania + [f"page={page_num}"]
+        urbania_url = base + ("?" + "&".join(current_params) if current_params else "")
+        print(f"URL de Urbania (Pág {page_num}): {urbania_url}")
+
+        # 2. Configurar los parámetros de ScrapingBee
+        payload = {
+            'api_key': API_KEY,
+            'url': urbania_url,
+            'render_js': 'true', # CRUCIAL: Necesario para renderizar el contenido dinámico
+            'wait': 4000 # Esperar 4 segundos (4000ms) para que todo cargue
+        }
+        
+        # 3. Llamar a la API de ScrapingBee
         try:
-            WebDriverWait(driver, 12).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "article, div[data-qa='posting PROPERTY'], div.postingCard"))
-            )
-        except:
-            pass
-        page_count = 0
-        while page_count < max_pages:
-            page_count += 1
-            last_h = driver.execute_script("return document.body.scrollHeight")
-            for _ in range(8):
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(wait_time)
-                new_h = driver.execute_script("return document.body.scrollHeight")
-                if new_h == last_h:
-                    break
-                last_h = new_h
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-            # intentar varios selectores
+            response = requests.get(SCRAPINGBEE_API_URL, params=payload, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"❌ Error ScrapingBee (Pág {page_num}): Código {response.status_code}")
+                # Si es la primera página y falla, paramos. Si es una página posterior, intentamos parar la paginación.
+                if page_num == 1:
+                    return pd.DataFrame()
+                break # Salir del bucle de paginación
+            
+            # El HTML renderizado está en response.text
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # 4. Extracción de datos (tu lógica de BeautifulSoup)
             card_selectors = [
                 "div[data-qa='posting PROPERTY']",
                 "article",
-                "div.postingCard-module__posting",
-                "div.postingCard",
-                "div.posting-card",
+                "div.postingCard", # Este es un selector común en su diseño
                 "div[class*='postingCard']",
             ]
             cards = []
             for sel in card_selectors:
                 found = soup.select(sel)
-                if found and len(found) > 0:
+                if found:
                     cards = found
                     break
+            
             if not cards:
-                cards = soup.select("a[href]")[:0]  # vacío
-            prev_len = len(results)
+                print(f"⚠️ No se encontraron anuncios en la página {page_num}. Terminando.")
+                break # Salir si no hay tarjetas, asumiendo que es el final
+            
+            new_results_count = 0
             for c in cards:
                 try:
                     a_tag = c.select_one("a[href]") or c.select_one("h2 a") or c.select_one("h3 a")
                     link = a_tag.get("href") if a_tag else ""
                     if link and link.startswith("/"):
                         link = "https://urbania.pe" + link
-                    if not link:
+                    if not link or link in seen:
                         continue
-                    if link in seen:
-                        continue
+                    
                     seen.add(link)
+                    new_results_count += 1
+                    
                     title = a_tag.get_text(" ", strip=True) if a_tag and a_tag.get_text(strip=True) else (c.get_text(" ", strip=True)[:140])
                     price_el = c.select_one("div.postingPrices-module__price") or c.select_one(".first-price") or c.select_one(".price")
                     price = price_el.get_text(" ", strip=True) if price_el else ""
-                    desc = c.get_text(" ", strip=True)[:400]
+                    
+                    # Intentar buscar la descripción en un elemento más corto, si es posible
+                    desc_el = c.select_one("p.postingCard-module__description") or c.select_one(".postingDescription")
+                    desc = desc_el.get_text(" ", strip=True)[:400] if desc_el else c.get_text(" ", strip=True)[:400] # Fallback a todo el texto
+
                     img = ""
                     img_tag = c.select_one("img")
                     if img_tag:
                         img = img_tag.get("src") or img_tag.get("data-src") or ""
                         if img and img.startswith("//"): img = "https:" + img
-                        # Limpiar espacios al final
                         img = img.strip()
-                    # EXTRAER DORMITORIOS
+                        
+                    # EXTRACCIÓN DE CARACTERÍSTICAS
+                    # Búsqueda más robusta de características
+                    features_list = c.select(".postingMainFeatures-module__posting-main-features-span") or c.select(".posting-features-item")
+
                     dormitorios_text = ""
-                    dorm_elem = c.select_one(".postingMainFeatures-module__posting-main-features-span:contains('dorm.')")
-                    if dorm_elem:
-                        dorm_text = dorm_elem.get_text(" ", strip=True)
-                        dorm_match = re.search(r'(\d+)', dorm_text)
-                        if dorm_match:
-                            dormitorios_text = dorm_match.group(1)
-                    # EXTRAER BAÑOS
                     banos_text = ""
-                    banos_elem = c.select_one(".postingMainFeatures-module__posting-main-features-span:contains('baño')")
-                    if banos_elem:
-                        banos_text_full = banos_elem.get_text(" ", strip=True)
-                        banos_match = re.search(r'(\d+)', banos_text_full)
-                        if banos_match:
-                            banos_text = banos_match.group(1)
-                    # EXTRAER METROS CUADRADOS
                     m2_text = ""
-                    m2_elem = c.select_one(".postingMainFeatures-module__posting-main-features-span:contains('m²')")
-                    if m2_elem:
-                        m2_text_full = m2_elem.get_text(" ", strip=True)
-                        m2_match = re.search(r'(\d+)', m2_text_full)
-                        if m2_match:
-                            m2_text = m2_match.group(1)
-                    # AHORA INCLUIMOS LOS VALORES EXTRAÍDOS
-                    results.append({
+                    
+                    for feature in features_list:
+                        text = feature.get_text(" ", strip=True)
+                        # Dormitorios
+                        if "dorm." in text.lower() or "dormitorio" in text.lower():
+                            match = re.search(r'(\d+)', text)
+                            if match:
+                                dormitorios_text = match.group(1)
+                        # Baños
+                        elif "baño" in text.lower():
+                            match = re.search(r'(\d+)', text)
+                            if match:
+                                banos_text = match.group(1)
+                        # Metros Cuadrados
+                        elif "m²" in text.lower():
+                            match = re.search(r'(\d+)', text)
+                            if match:
+                                m2_text = match.group(1)
+                                
+                    all_results.append({
                         "titulo": title,
                         "precio": price,
                         "m2": m2_text,
@@ -195,56 +213,17 @@ def scrape_urbania(zona: str = "", dormitorios: str = "0", banos: str = "0",
                         "link": link,
                         "imagen_url": img
                     })
-                except Exception:
+                except Exception as e:
+                    # Opcional: imprimir el error para depuración
+                    # print(f"Error procesando tarjeta: {e}") 
                     continue
-            # si no hay nuevos resultados intentar paginar/click "cargar más"
-            if len(results) == prev_len:
-                clicked = False
-                try:
-                    # probar varios selectores para "cargar más" / siguiente
-                    next_selectors = [
-                        "a[rel='next']", "a[aria-label='Siguiente']", "a[data-qa='pagination-next']",
-                        "button[data-qa='pagination-next']", "a.pagination__next", "a.next", "button.load-more", "a.load-more"
-                    ]
-                    for sel in next_selectors:
-                        elems = driver.find_elements(By.CSS_SELECTOR, sel)
-                        for e in elems:
-                            try:
-                                if e.is_displayed():
-                                    driver.execute_script("arguments[0].scrollIntoView(true);", e)
-                                    time.sleep(0.2)
-                                    e.click()
-                                    time.sleep(wait_time + 0.5)
-                                    clicked = True
-                                    break
-                            except:
-                                continue
-                        if clicked:
-                            break
-                except:
-                    clicked = False
-                if not clicked:
-                    # intentar incrementar page= en URL
-                    cur = driver.current_url
-                    m = re.search(r"([?&]page=)(\d+)", cur)
-                    if m:
-                        cur_page = int(m.group(2))
-                        next_page = cur_page + 1
-                        new_url = re.sub(r"([?&]page=)\d+", r"\1{}".format(next_page), cur)
-                        try:
-                            driver.get(new_url)
-                            time.sleep(wait_time + 0.8)
-                            clicked = True
-                        except:
-                            clicked = False
-                if not clicked:
-                    break
-            time.sleep(0.4)
-        return pd.DataFrame(results)
-    except Exception:
-        return pd.DataFrame()
-    finally:
-        try:
-            driver.quit()
-        except:
-            pass
+            
+            # Si no encontramos nuevos resultados en esta página, es probable que se haya acabado.
+            if new_results_count == 0 and page_num > 1:
+                break
+                
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error de conexión con ScrapingBee (Pág {page_num}): {e}")
+            break # Salir en caso de error de red o timeout
+            
+    return pd.DataFrame(all_results)

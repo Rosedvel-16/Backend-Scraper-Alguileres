@@ -20,3 +20,6 @@ pyvenv.cfg
 dist/
 build/
 *.log
+
+# Archivo de variables de entorno local (CRÍTICO)
+.env 

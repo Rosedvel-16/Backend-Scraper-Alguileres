@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 from typing import Optional
-
+import os
 # Importar las funciones de scraping de sus respectivos archivos
 from scrapers.nestoria import scrape_nestoria
 from scrapers.infocasas import scrape_infocasas
