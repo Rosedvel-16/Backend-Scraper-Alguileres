@@ -1,0 +1,22 @@
+# Entorno virtual
+venv/
+.venv/
+env/
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de configuración de entornos virtuales
+pyvenv.cfg
+
+# Archivos de la base de datos (si usas SQLite)
+*.sqlite3
+*.db
+
+# Directorios de builds y logs (si los tuvieras)
+dist/
+build/
+*.log
