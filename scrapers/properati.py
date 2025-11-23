@@ -6,70 +6,41 @@ from bs4 import BeautifulSoup
 
 # Imports locales desde el módulo 'common'
 from .common import (
-    COMMON_UA,
+    # COMMON_UA, # <-- ¡ELIMINADO!
     slugify_zone
 )
 
+# User Agent genérico para usar en Properati (si se necesita)
+PROPERATI_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
+
 # -------------------- Properati --------------------
 def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
-                       price_min: Optional[int] = None, price_max: Optional[int] = None,
-                       palabras_clave: str = ""):
+                        price_min: Optional[int] = None, price_max: Optional[int] = None,
+                        palabras_clave: str = ""):
     if zona and zona.strip():
         # Mapeo específico para Properati
         ZONA_MAPEO_PROPERATI = {
-            "ancón": "ancon",
-            "ate": "ate",
-            "barranco": "barranco",
-            "breña": "brena",
-            "carabayllo": "carabayllo",
-            "chaclacayo": "chaclacayo",
-            "chorrillos": "chorrillos",
-            "cieneguilla": "cieneguilla",
-            "comas": "comas",
-            "el agustino": "el-agustino",
-            "independencia": "independencia",
-            "jesús maría": "jesus-maria",
-            "la molina": "la-molina",
-            "la victoria": "la-victoria",
-            "lima": "lima",
-            "lince": "lince",
-            "los olivos": "los-olivos",
-            "lurigancho": "lurigancho",
-            "lurín": "lurin",
-            "magdalena del mar": "magdalena-del-mar",
-            "miraflores": "miraflores",
-            "pachacámac": "pachacamac",
-            "pucusana": "pucusana",
-            "pueblo libre": "pueblo-libre",
-            "puente piedra": "puente-piedra",
-            "punta hermosa": "punta-hermosa",
-            "punta negra": "punta-negra",
-            "rímac": "rimac",
-            "san bartolo": "san-bartolo",
-            "san borja": "san-borja",
-            "san isidro": "san-isidro",
-            "san juan de lurigancho": "san-juan-de-lurigancho",
-            "san juan de miraflores": "san-juan-de-miraflores",
-            "san luis": "san-luis",
-            "san martín de porres": "san-martin-de-porres",
-            "san miguel": "san-miguel",
-            "santa anita": "santa-anita",
-            "santa maría del mar": "santa-maria-del-mar",
-            "santa rosa": "santa-rosa",
-            "santiago de surco": "santiago-de-surco",
-            "surquillo": "surquillo",
-            "villa el salvador": "villa-el-salvador",
-            "villa maría del triunfo": "villa-maria-del-triunfo",
-            # Nuevas entradas para manejar "cercado de lima"
-            "cercado de lima": "lima-cercado",
-            "cercado lima": "lima-cercado",
-            "lima cercado": "lima-cercado",
+            "ancón": "ancon", "ate": "ate", "barranco": "barranco", "breña": "brena", "carabayllo": "carabayllo",
+            "chaclacayo": "chaclacayo", "chorrillos": "chorrillos", "cieneguilla": "cieneguilla", "comas": "comas",
+            "el agustino": "el-agustino", "independencia": "independencia", "jesús maría": "jesus-maria",
+            "la molina": "la-molina", "la victoria": "la-victoria", "lima": "lima", "lince": "lince",
+            "los olivos": "los-olivos", "lurigancho": "lurigancho", "lurín": "lurin", "magdalena del mar": "magdalena-del-mar",
+            "miraflores": "miraflores", "pachacámac": "pachacamac", "pucusana": "pucusana", "pueblo libre": "pueblo-libre",
+            "puente piedra": "puente-piedra", "punta hermosa": "punta-hermosa", "punta negra": "punta-negra", "rímac": "rimac",
+            "san bartolo": "san-bartolo", "san borja": "san-borja", "san isidro": "san-isidro", "san juan de lurigancho": "san-juan-de-lurigancho",
+            "san juan de miraflores": "san-juan-de-miraflores", "san luis": "san-luis", "san martín de porres": "san-martin-de-porres",
+            "san miguel": "san-miguel", "santa anita": "santa-anita", "santa maría del mar": "santa-maria-del-mar",
+            "santa rosa": "santa-rosa", "santiago de surco": "santiago-de-surco", "surquillo": "surquillo",
+            "villa el salvador": "villa-el-salvador", "villa maría del triunfo": "villa-maria-del-triunfo",
+            "cercado de lima": "lima-cercado", "cercado lima": "lima-cercado", "lima cercado": "lima-cercado",
         }
         zona_lower = zona.strip().lower()
         zone_slug = ZONA_MAPEO_PROPERATI.get(zona_lower, slugify_zone(zona))
         base = f"https://www.properati.com.pe/s/{zone_slug}/alquiler?propertyType=apartment%2Chouse"
     else:
         base = "https://www.properati.com.pe/s/alquiler?propertyType=apartment%2Chouse"
+        
     # Agregar parámetros de filtros
     params = []
     if dormitorios and dormitorios != "0":
@@ -80,6 +51,7 @@ def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
         params.append(f"minPrice={price_min}")
     if price_max is not None:
         params.append(f"maxPrice={price_max}")
+        
     # Procesar palabras clave: convertir "piscina" → amenities=swimming_pool, "jardin" → amenities=garden
     if palabras_clave and palabras_clave.strip():
         palabras = palabras_clave.lower().split()
@@ -98,18 +70,24 @@ def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
         # Si quedan otras palabras clave, agregarlas como keyword
         if other_keywords:
             base += "&keyword=" + requests.utils.quote(" ".join(other_keywords))
+            
     # Construir URL final
     if params:
         base += "&" + "&".join(params)
-    print(f"URL de Properati: {base}")  # Mostrar URL usada
+        
+    print(f"URL de Properati: {base}") 
+    
     try:
-        r = requests.get(base, headers={"User-Agent": COMMON_UA}, timeout=15)
+        # Usamos PROPERATI_UA definido arriba
+        r = requests.get(base, headers={"User-Agent": PROPERATI_UA}, timeout=15) 
         r.raise_for_status()
     except:
         return pd.DataFrame()
+        
     soup = BeautifulSoup(r.text, "html.parser")
     cards = soup.select("article") or soup.select("div.posting-card") or soup.select("a[href]")
     results = []
+    
     for c in cards:
         try:
             a = c.select_one("a[href]") or c.select_one("a.title")
@@ -117,10 +95,12 @@ def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
             if href and href.startswith("/"):
                 href = "https://www.properati.com.pe" + href
             title = a.get_text(" ", strip=True) if a else c.get_text(" ", strip=True)[:140]
+            
             price = ""
             price_elem = c.select_one(".price")
             if price_elem:
                 price = price_elem.get_text(" ", strip=True)
+                
             # EXTRAER DORMITORIOS
             dormitorios_text = ""
             dorm_elem = c.select_one(".properties__bedrooms")
@@ -145,11 +125,12 @@ def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
                 m2_match = re.search(r'(\d+)', m2_text_full)
                 if m2_match:
                     m2_text = m2_match.group(1)
+                    
             img = ""
             img_tag = c.select_one("img")
             if img_tag:
                 img = img_tag.get("src") or img_tag.get("data-src") or ""
-                # Filtrar imágenes no deseadas: solo aceptar las que comienzan con https://img (no con https://images.proppit)
+                # Mantenemos tu lógica de filtrado de imágenes
                 if img and img.startswith("https://img"):
                     img = img.strip()
                 elif img and img.startswith("//"):
@@ -157,9 +138,10 @@ def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
                     if img_full.startswith("https://img"):
                         img = img_full.strip()
                     else:
-                        img = ""  # Rechazar otras fuentes
+                        img = "" 
                 else:
-                    img = ""  # Rechazar si no cumple con el criterio
+                    img = "" 
+                    
             # AHORA INCLUIMOS LOS VALORES EXTRAÍDOS
             results.append({
                 "titulo": title,
@@ -172,6 +154,7 @@ def scrape_properati(zona: str = "", dormitorios: str = "0", banos: str = "0",
                 "imagen_url": img
             })
         except Exception as e:
-            print(f"Error en Properati al procesar un anuncio: {e}")
+            # print(f"Error en Properati al procesar un anuncio: {e}") # Descomentar para debug
             continue
+            
     return pd.DataFrame(results)
