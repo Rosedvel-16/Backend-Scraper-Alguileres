@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import pandas as pd
+import os
 
 # Importar el orquestador principal
 from orchestrator import run_all_scrapers
@@ -14,7 +15,17 @@ from scrapers.doomos import scrape_doomos
 
 # --- Inicialización de Flask ---
 app = Flask(__name__)
-CORS(app)  # Permite que React (desde otro puerto) llame a esta API
+
+# Configurar CORS - permitir tu dominio de Vercel
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "https://frontend-scraper-alquileres.vercel.app/",
+        ]
+    }
+})
 
 # Mapeo de strings a funciones de scraper
 SCRAPER_MAP = {
@@ -110,7 +121,15 @@ def index():
         "query_params_opcionales": "?zona=...&dormitorios=...&banos=...&price_min=...&price_max=...&palabras_clave=..."
     })
 
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint para monitoreo."""
+    return jsonify({"status": "ok", "message": "Backend is running"}), 200
+
 # --- Iniciar el servidor ---
 if __name__ == '__main__':
-    # Usamos el puerto 5001 para el backend
-    app.run(debug=True, port=5001)
+    # Obtener el puerto del entorno o usar 5001 por defecto
+    port = int(os.environ.get('PORT', 5001))
+    # En producción, debug debe ser False
+    debug = os.environ.get('FLASK_ENV') != 'production'
+    app.run(debug=debug, host='0.0.0.0', port=port)

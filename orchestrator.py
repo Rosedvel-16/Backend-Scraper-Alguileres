@@ -1,8 +1,6 @@
 import re
 import pandas as pd
 from typing import Optional
-import os
-# Importar las funciones de scraping de sus respectivos archivos
 from scrapers.nestoria import scrape_nestoria
 from scrapers.infocasas import scrape_infocasas
 from scrapers.urbania import scrape_urbania
@@ -105,17 +103,13 @@ def run_all_scrapers(zona: str = "", dormitorios: str = "0", banos: str = "0",
         counts_raw[name] = total_raw
         print(f"   encontrados (raw): {total_raw}")
         
-        # normalize
         df = df.fillna("").astype(object)
         for col in ["titulo","precio","m2","dormitorios","baños","descripcion","link","imagen_url"]:
             df[col] = df[col].astype(str).str.strip().replace({None: "", "None": ""})
         
-        # strict filters (price/dorm/banos)
         df_filtered = _filter_df_strict(df, dormitorios, banos, price_min, price_max)
         print(f"   después filtrado estricto: {len(df_filtered)}")
         
-        # keywords: apply post-scrape ONLY for sources that didn't use keyword in URL
-        # EXCLUDE properati because it uses 'amenities' and text may not contain the keyword
         if palabras_clave and palabras_clave.strip() and name not in ("urbania", "doomos", "properati"):
             prev = len(df_filtered)
             df_filtered = _filter_by_keywords(df_filtered, palabras_clave)
@@ -133,12 +127,10 @@ def run_all_scrapers(zona: str = "", dormitorios: str = "0", banos: str = "0",
     
     combined = pd.concat(frames, ignore_index=True, sort=False)
     
-    # Eliminar filas donde el link empieza con "#" o está vacío
     combined = combined[~combined["link"].str.startswith("#")].reset_index(drop=True)
     combined = combined[combined["link"] != ""].reset_index(drop=True)
     combined = combined.drop_duplicates(subset=["link","titulo"], keep="first").reset_index(drop=True)
     
     print(f"Resultados combinados y unificados: {len(combined)}")
     
-    # Devolver el DataFrame combinado
     return combined

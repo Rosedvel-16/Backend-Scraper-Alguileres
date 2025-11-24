@@ -1,47 +1,42 @@
 import re
-import os
-import requests
+import time
 from typing import Optional
 import pandas as pd
 from bs4 import BeautifulSoup
 
+# Imports locales desde el módulo 'common'
 from .common import (
+    create_driver,
     parse_precio_con_moneda,
     normalize_text,
     _extract_int_from_text
 )
 
-SCRAPINGBEE_API_URL = "https://api.scrapingbee.com/v1/"
-API_KEY = os.environ.get("SCRAPINGBEE_API_KEY")
-
+# -------------------- Nestoria (VERSÓN CORREGIDA Y FUNCIONAL CON IMÁGENES) --------------------
 EXCEPCIONES = ["miraflores", "tarapoto", "la molina", "magdalena", "lambayeque", "ventanilla", "la victoria"]
 
 def build_zona_slug_nestoria(zona_input: str) -> str:
-    """Construye el slug de la zona para la URL de Nestoria."""
     if not zona_input or not zona_input.strip():
-        return "lima"
+        return "lima"  # ← ¡ESTO ES LO ÚNICO QUE CAMBIA!
     z = zona_input.strip().lower().replace(" ", "-")
-    if z not in [e.lower().replace(" ", "-") for e in EXCEPCIONES]:
+    if z not in [e.lower() for e in EXCEPCIONES]:
         return z
     else:
         return "lima_" + z
 
 def scrape_nestoria(zona: str = "", dormitorios: str = "0", banos: str = "0",
-                     price_min: Optional[int] = None, price_max: Optional[int] = None,
-                     palabras_clave: str = "", max_results_per_zone: int = 200):
-    
-    # ⚠️ VERIFICACIÓN DE CLAVE API
-    if not API_KEY:
-        print("❌ Error: Variable de entorno SCRAPINGBEE_API_KEY no encontrada.")
-        return pd.DataFrame()
-
+                      price_min: Optional[int] = None, price_max: Optional[int] = None,
+                      palabras_clave: str = "", max_results_per_zone: int = 200):
+    """
+    Scraper FINAL para Nestoria. Usa Selenium.
+    Extrae la imagen DEL DETALLE de cada anuncio.
+    Solo entra al detalle para obtener la imagen, no para extraer más datos.
+    VALIDA si la búsqueda devolvió 0 resultados y en ese caso devuelve DataFrame vacío.
+    """
     zona_slug = build_zona_slug_nestoria(zona)
     base_url = f"https://www.nestoria.pe/{zona_slug}/inmuebles/alquiler"
-    
-    # Construcción de la URL base con filtros
     if dormitorios and dormitorios != "0":
         base_url += f"/dormitorios-{dormitorios}"
-        
     params = []
     if banos and banos != "0":
         params.append(f"bathrooms={banos}")
@@ -49,145 +44,141 @@ def scrape_nestoria(zona: str = "", dormitorios: str = "0", banos: str = "0",
         params.append(f"price_min={price_min}")
     if price_max and str(price_max) != "0":
         params.append(f"price_max={price_max}")
-        
     if params:
         base_url += "?" + "&".join(params)
-        
     print(f"URL de Nestoria: {base_url}")
-    
-    # --- Configuración de ScrapingBee ---
-    payload = {
-        'api_key': API_KEY,
-        'url': base_url,
-        'render_js': 'true', # Habilitar JS rendering
-        'wait': 4000,        # Esperar 4 segundos (mucha información se carga con JS)
-        'screenshot': 'false',
-        'extract_rules': '{"items": "li.rating__new, ul#main__listing_res > li", "next_page": "a.pagination__next"}' # Esto NO funcionará en el plan gratuito, solo para referencia. Usaremos la paginación manual.
-    }
-    
+    driver = create_driver(headless=True)
     results = []
-    seen_links = set()
-    current_url = base_url
-    page_count = 0
-    max_pages = 5 # Límite de páginas para evitar un uso excesivo de tokens de ScrapingBee
-    
-    while page_count < max_pages:
-        page_count += 1
-        print(f"-> Scrapeando Nestoria (Página {page_count}): {current_url}")
-        
-        # Actualizar la URL en el payload
-        payload['url'] = current_url
-        
-        try:
-            # 1. Llamar a la API de ScrapingBee
-            response = requests.get(SCRAPINGBEE_API_URL, params=payload, timeout=40)
-            
-            if response.status_code != 200:
-                print(f"❌ Error ScrapingBee (Pág {page_count}): Código {response.status_code}")
-                break
-                
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            # --- VALIDACIÓN: Verificar si hay 0 resultados ---
-            if page_count == 1:
-                h1_title = soup.select_one("div.listings__title h1")
-                if h1_title and re.search(r'^0\s+inmuebles', h1_title.get_text(strip=True).lower()):
-                    print("Nestoria: La búsqueda devolvió 0 resultados. Saltando...")
-                    return pd.DataFrame()
+    try:
+        driver.get(base_url)
+        time.sleep(3)
 
-            # --- Extracción de datos ---
-            items = soup.select("li.rating__new") or soup.select("ul#main__listing_res > li")
-            
-            if not items:
-                print(f"⚠️ No se encontraron anuncios en la página {page_count}. Terminando.")
-                break
-                
-            new_results_found = False
-            
-            for li in items:
+        # --- NUEVA VALIDACIÓN: Verificar si hay 0 resultados ---
+        soup_check = BeautifulSoup(driver.page_source, "html.parser")
+        h1_title = soup_check.select_one("div.listings__title h1")
+        if h1_title:
+            title_text = h1_title.get_text(strip=True).lower()
+            # Buscar el patrón: "{número} inmuebles en ..."
+            match = re.search(r'^(\d+)\s+inmuebles', title_text)
+            if match:
+                result_count = int(match.group(1))
+                if result_count == 0:
+                    print("Nestoria: La búsqueda devolvió 0 resultados. Saltando...")
+                    return pd.DataFrame()  # Devolver vacío si son 0 resultados
+            else:
+                print("Advertencia: No se pudo extraer el número de resultados de la página.")
+        else:
+            print("Advertencia: No se encontró el título con el conteo de resultados.")
+
+        # Scroll para cargar más resultados
+        for _ in range(5):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1)
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        # Seleccionar los contenedores de anuncios
+        items = soup.select("li.rating__new") or soup.select("ul#main__listing_res > li")
+        if not items:
+            items = [li for li in soup.find_all("li") if li.select_one(".result__details__price")]
+        if not items:
+            items = soup.find_all(["li", "div", "article"], class_=lambda x: x and any(cls in x for cls in ["listing", "result", "property", "item"]))
+        seen_links = set()
+        for i, li in enumerate(items):
+            try:
+                # Extraer link
+                a_tag = li.select_one("a.results__link") or li.select_one("a[href]")
+                if not a_tag:
+                    continue
+                link = a_tag.get("data-href") or a_tag.get("href") or ""
+                if link and link.startswith("/"):
+                    link = "https://www.nestoria.pe" + link
+                if not link or link in seen_links:
+                    continue
+                # Extraer título
+                title_elem = li.select_one(".listing__title__text") or li.select_one(".listing__title") or a_tag
+                title = title_elem.get_text(" ", strip=True) if title_elem else a_tag.get_text(" ", strip=True)[:140]
+                # Extraer precio
+                price_elem = li.select_one(".result__details__price span") or li.select_one(".result__details__price") or li.select_one(".price")
+                price_text = price_elem.get_text(" ", strip=True) if price_elem else ""
+                # Aplicar filtro de precio aquí mismo
+                moneda, precio_val = parse_precio_con_moneda(price_text)
+                if price_max is not None and moneda == "S" and precio_val is not None and precio_val > price_max:
+                    continue
+                if price_min is not None and moneda == "S" and precio_val is not None and precio_val < price_min:
+                    continue
+                if moneda == "USD" and (price_max is not None or price_min is not None):
+                    continue
+                # Extraer descripción
+                desc_elem = li.select_one(".listing__description") or li.select_one(".result__summary") or None
+                desc = desc_elem.get_text(" ", strip=True) if desc_elem else li.get_text(" ", strip=True)[:800]
+                # Extraer dormitorios, baños y m2 del texto
+                text_content = li.get_text(" ", strip=True).lower()
+                dormitorios_text = ""
+                dorm_match = re.search(r'(\d+)\s*dormitori', text_content, flags=re.I)
+                if dorm_match:
+                    dormitorios_text = dorm_match.group(1)
+                banos_text = ""
+                banos_match = re.search(r'(\d+)\s*bañ', text_content, flags=re.I)
+                if banos_match:
+                    banos_text = banos_match.group(1)
+                m2_text = ""
+                m2_match = re.search(r'(\d{1,4})\s*(m²|m2)', text_content, flags=re.I)
+                if m2_match:
+                    m2_text = m2_match.group(1)
+                # AHORA: Entrar al detalle para obtener la imagen principal (MÉTODO ROBUSTO)
+                img_url = ""
                 try:
-                    # Extraer link
-                    a_tag = li.select_one("a.results__link") or li.select_one("a[href]")
-                    if not a_tag:
-                        continue
-                        
-                    link = a_tag.get("data-href") or a_tag.get("href") or ""
-                    if link and link.startswith("/"):
-                        link = "https://www.nestoria.pe" + link
-                    
-                    if not link or link in seen_links:
-                        continue
-                        
-                    seen_links.add(link)
-                    new_results_found = True
-                    
-                    # Extraer título y precio (simplificado)
-                    title_elem = li.select_one(".listing__title__text") or li.select_one(".listing__title") or a_tag
-                    title = title_elem.get_text(" ", strip=True) if title_elem else a_tag.get_text(" ", strip=True)[:140]
-                    
-                    price_elem = li.select_one(".result__details__price span") or li.select_one(".result__details__price") or li.select_one(".price")
-                    price_text = price_elem.get_text(" ", strip=True) if price_elem else ""
-                    
-                    # Aplicar filtro de precio (solo en Soles) - Tu lógica se mantiene
-                    moneda, precio_val = parse_precio_con_moneda(price_text)
-                    if (price_max is not None and moneda == "S" and precio_val is not None and precio_val > price_max) or \
-                       (price_min is not None and moneda == "S" and precio_val is not None and precio_val < price_min) or \
-                       (moneda == "USD" and (price_max is not None or price_min is not None)):
-                        continue
-                        
-                    desc_elem = li.select_one(".listing__description") or li.select_one(".result__summary")
-                    desc = desc_elem.get_text(" ", strip=True) if desc_elem else li.get_text(" ", strip=True)[:800]
-                    
-                    # Extracción de características del texto
-                    text_content = li.get_text(" ", strip=True).lower()
-                    dormitorios_text = re.search(r'(\d+)\s*dormitori', text_content, flags=re.I).group(1) if re.search(r'(\d+)\s*dormitori', text_content, flags=re.I) else ""
-                    banos_text = re.search(r'(\d+)\s*bañ', text_content, flags=re.I).group(1) if re.search(r'(\d+)\s*bañ', text_content, flags=re.I) else ""
-                    m2_text = re.search(r'(\d{1,4})\s*(m²|m2)', text_content, flags=re.I).group(1) if re.search(r'(\d{1,4})\s*(m²|m2)', text_content, flags=re.I) else ""
-                    
-                    # --- Extracción de Imagen ---
-                    # Buscamos la imagen principal que debería estar cargada por JS
-                    img_url = ""
-                    img_tag = li.select_one("img.result__image") or li.select_one(".listing__image img")
-                    
-                    if img_tag:
-                        img_url = img_tag.get("src") or img_tag.get("data-src") or ""
-                        if img_url and img_url.startswith("//"):
+                    driver.get(link)
+                    time.sleep(1)  # Esperar a que cargue la imagen
+                    detail_soup = BeautifulSoup(driver.page_source, "html.parser")
+
+                    # Método 1: Buscar por el selector original (data-element)
+                    main_img = detail_soup.select_one("img[data-element='main-swiper-slide']")
+                    if main_img:
+                        img_url = main_img.get("src") or main_img.get("data-src") or ""
+
+                    # Método 2: Si falla, buscar por ID 'd_a_c_photo'
+                    if not img_url:
+                        img_by_id = detail_soup.select_one("img#d_a_c_photo")
+                        if img_by_id:
+                            img_url = img_by_id.get("src") or img_by_id.get("data-src") or ""
+
+                    # Método 3: Si aún no se encuentra, buscar en la etiqueta meta con itemprop="image"
+                    if not img_url:
+                        meta_img = detail_soup.select_one("meta[itemprop='image']")
+                        if meta_img:
+                            img_url = meta_img.get("content") or ""
+
+                    # Limpiar y formatear la URL
+                    if img_url:
+                        if img_url.startswith("//"):
                             img_url = "https:" + img_url
                         img_url = img_url.strip()
-                    
-                    results.append({
-                        "titulo": title,
-                        "precio": price_text,
-                        "m2": m2_text,
-                        "dormitorios": dormitorios_text,
-                        "baños": banos_text,
-                        "descripcion": desc,
-                        "link": link,
-                        "imagen_url": img_url
-                    })
-                except Exception:
-                    continue
-            
-            # --- Lógica de Paginación ---
-            next_page_tag = soup.select_one("a.pagination__next")
-            if next_page_tag:
-                # El link de la siguiente página es relativo
-                next_page_href = next_page_tag.get("href")
-                if next_page_href and next_page_href.startswith("/"):
-                    current_url = "https://www.nestoria.pe" + next_page_href
-                elif next_page_href:
-                    current_url = next_page_href
-                else:
-                    break
-            else:
-                break # Si no hay botón de Siguiente, terminamos
-                
-            if not new_results_found:
-                 break # Si no se encontraron nuevos resultados en la página, terminamos
-                 
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Error de conexión con ScrapingBee (Pág {page_count}): {e}")
-            break # Salir en caso de error de red o timeout
-            
+                    else:
+                        img_url = ""  # Asegurarse de que sea cadena vacía si no se encontró nada
+
+                except Exception as e:
+                    print(f"Error al obtener imagen de detalle en Nestoria para {link}: {e}")
+                    pass
+
+                results.append({
+                    "titulo": title,
+                    "precio": price_text,
+                    "m2": m2_text,
+                    "dormitorios": dormitorios_text,
+                    "baños": banos_text,
+                    "descripcion": desc,
+                    "link": link,
+                    "imagen_url": img_url
+                })
+                seen_links.add(link)
+            except Exception as e:
+                continue
+    except Exception as e:
+        print(f"Error en Nestoria scraper: {e}")
+    finally:
+        try:
+            driver.quit()
+        except:
+            pass
     print(f"Procesados {len(results)} anuncios válidos")
     return pd.DataFrame(results)
