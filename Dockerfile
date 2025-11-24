@@ -25,16 +25,15 @@ RUN apt-get update && apt-get install -y \
 # Establecer la carpeta de trabajo
 WORKDIR /app
 
-# Copiar archivos de requirements y Procfile
+# Copiar requirements antes de instalar
 COPY requirements.txt .
-COPY Procfile .
 
-# Instalar dependencias de Python (Selenium, Flask, etc.)
+# Instalar dependencias de Python (incluyendo selenium)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código del proyecto
+# Copiar el Procfile y el código del proyecto
+COPY Procfile .
 COPY . .
 
-# Comando de inicio del servidor web (usa el Procfile si está presente)
-# Gunicorn es el servidor web
+# Comando de inicio del servidor web 
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]

@@ -1,6 +1,9 @@
+# requirements.txt
 flask
 flask-cors
 pandas
+selenium
+webdriver-manager
 beautifulsoup4
 requests
-gunicorn  
+gunicorn
