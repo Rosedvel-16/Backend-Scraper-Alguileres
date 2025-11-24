@@ -5,60 +5,54 @@ import pandas as pd
 from typing import Optional
 from bs4 import BeautifulSoup
 
+# Imports de Selenium
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager 
+from webdriver_manager.chrome import ChromeDriverManager
 
-COMMON_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " \
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+# User Agent Común
+COMMON_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 
 # -------------------- Helpers --------------------
 
 def create_driver(headless: bool = True):
-    """
-    Crea una instancia del driver de Chrome.
-    Adaptado para entornos de contenedor (Railway/Docker).
-    """
+    """Crea una instancia del driver de Chrome."""
     options = Options()
-    
-    # Configuración necesaria para correr en entornos de Linux (Docker)
-    options.add_argument("--headless=new") 
-    options.add_argument("--no-sandbox") 
+    if headless:
+        options.add_argument("--headless=new")
+    options.add_argument(f"user-agent={COMMON_UA}")
     options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument(f"user-agent={COMMON_UA}")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-
-    # 1. Intentar con Webdriver Manager (falla a menudo en Docker)
+    
+    # Usa webdriver-manager para instalar y gestionar el driver automáticamente
     try:
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-        print("DEBUG: Usando WebDriverManager (Método 1)")
-        return driver
     except Exception as e:
-        print(f"DEBUG: Fallo de WebDriverManager ({e}). Intentando método 2...")
+        print(f"Error al iniciar webdriver-manager: {e}")
+        # Fallback por si falla (ej. permisos)
+        driver = webdriver.Chrome(options=options)
 
-    # 2. Método de Fallback (Usando rutas esperadas de Chrome en Docker/Linux)
     try:
-        options.binary_location = '/usr/bin/chromium' 
-        service = Service('/usr/bin/chromedriver') 
-        driver = webdriver.Chrome(service=service, options=options)
-        print("DEBUG: Usando rutas de contenedor (Método 2)")
-        return driver
-    except Exception as e:
-        print(f"ERROR FATAL: No se pudo iniciar el driver en ninguna modalidad: {e}")
-        raise RuntimeError("El servicio de scraping falló al iniciar el navegador.")
-    
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        })
+    except Exception:
+        pass
+    return driver
+
 def slugify_zone(zona: str) -> str:
     if not zona:
         return ""
-    import unicodedata
     s = zona.lower().strip()
     # Reemplazar caracteres especiales y tildes
     trans = str.maketrans("áéíóúñü", "aeiounu")
@@ -95,10 +89,16 @@ def normalize_text(text):
     return unicodedata.normalize('NFKD', text.lower()).encode('ASCII','ignore').decode('utf-8')
 
 def _extract_int_from_text(s):
-    """Extrae el primer número entero de una cadena de texto."""
+    """
+    Extrae el primer número entero de una cadena de texto.
+    Es más robusta y maneja espacios, saltos de línea y caracteres especiales.
+    """
     if s is None:
         return None
+    # Convertir a string y limpiar espacios en blanco alrededor
     text = str(s).strip()
+    # Reemplazar cualquier espacio en blanco (incluyendo &nbsp;, tabulaciones, saltos de línea) por un espacio normal
     text = re.sub(r'\s+', ' ', text)
+    # Buscar el primer número entero
     m = re.search(r'(\d+)', text)
     return int(m.group(1)) if m else None
