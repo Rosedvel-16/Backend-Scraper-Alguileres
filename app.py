@@ -22,7 +22,7 @@ CORS(app, resources={
         "origins": [
             "http://localhost:3000",
             "http://localhost:5173",
-            "https://frontend-scraper-alquileres.vercel.app/",
+            "https://frontend-scraper-alquileres.vercel.app/"
         ]
     }
 })
