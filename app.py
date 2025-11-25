@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import pandas as pd
 import os
+import time # Importar time para medir la duración
 
 # Importar el orquestador principal
 from orchestrator import run_all_scrapers
@@ -16,13 +17,13 @@ from scrapers.doomos import scrape_doomos
 # --- Inicialización de Flask ---
 app = Flask(__name__)
 
-# Configurar CORS - permitir tu dominio de Vercel
+# Configurar CORS - permitir tu dominio de Vercel (sin la barra final)
 CORS(app, resources={
     r"/*": {
         "origins": [
             "http://localhost:3000",
             "http://localhost:5173",
-            "https://frontend-scraper-alquileres.vercel.app/"
+            "https://frontend-scraper-alquileres.vercel.app"
         ]
     }
 })
@@ -64,29 +65,32 @@ def _get_params_from_request(req):
 def handle_scrape_all():
     """
     Endpoint para ejecutar TODOS los scrapers, combinarlos y filtrarlos.
-    Ej: GET http://127.0.0.1:5001/scrape-all?zona=miraflores&dormitorios=2
     """
     params = _get_params_from_request(request)
     print(f"Recibida petición para /scrape-all con params: {params}")
 
+    start_time = time.time()
     try:
         # Ejecutar el orquestador
         df = run_all_scrapers(**params)
         
-        # Convertir el DataFrame a JSON
+        end_time = time.time()
+        print(f"✅ BÚSQUEDA /scrape-all finalizada en {end_time - start_time:.2f} segundos.")
+        
+        # Convertir el DataFrame a JSON y devolverlo
         json_results = df.to_dict('records')
         return jsonify(json_results)
 
     except Exception as e:
-        print(f"Error en el endpoint /scrape-all: {e}")
-        return jsonify({"error": str(e)}), 500
+        end_time = time.time()
+        print(f"❌ Error en el endpoint /scrape-all después de {end_time - start_time:.2f}s: {e}")
+        return jsonify({"error": "Error interno del servidor. Probable falta de memoria (OOMKilled)."}), 500
+
 
 @app.route('/scrape/<source>', methods=['GET'])
 def handle_scrape_single(source: str):
     """
     Endpoint para ejecutar UN SOLO scraper.
-    Ej: GET http://127.0.0.1:5001/scrape/doomos?zona=surquillo
-    Ej: GET http://127.0.0.1:5001/scrape/nestoria?zona=lima
     """
     params = _get_params_from_request(request)
     print(f"Recibida petición para /scrape/{source} con params: {params}")
@@ -97,17 +101,23 @@ def handle_scrape_single(source: str):
     if not scraper_function:
         return jsonify({"error": f"Fuente '{source}' no encontrada. Fuentes válidas: {list(SCRAPER_MAP.keys())}"}), 404
 
+    start_time = time.time()
     try:
         # Ejecutar el scraper individual
         df = scraper_function(**params)
         
+        end_time = time.time()
+        print(f"✅ BÚSQUEDA /scrape/{source} finalizada en {end_time - start_time:.2f} segundos.")
+
         # Convertir el DataFrame a JSON
         json_results = df.to_dict('records')
         return jsonify(json_results)
 
     except Exception as e:
-        print(f"Error en el endpoint /scrape/{source}: {e}")
-        return jsonify({"error": str(e)}), 500
+        end_time = time.time()
+        print(f"❌ Error en el endpoint /scrape/{source} después de {end_time - start_time:.2f}s: {e}")
+        return jsonify({"error": f"Error interno del servidor en {source}. Probable falta de memoria (OOMKilled)."}), 500
+
 
 @app.route('/', methods=['GET'])
 def index():
@@ -119,17 +129,15 @@ def index():
             "/scrape/<fuente>": "Ejecuta un scraper individual. Fuentes: [nestoria, infocasas, urbania, properati, doomos]"
         },
         "query_params_opcionales": "?zona=...&dormitorios=...&banos=...&price_min=...&price_max=...&palabras_clave=..."
-    })
+    }), 200
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint para monitoreo."""
     return jsonify({"status": "ok", "message": "Backend is running"}), 200
 
-# --- Iniciar el servidor ---
+# Esta sección se ignora en Render porque se usa Gunicorn.
 if __name__ == '__main__':
     # Obtener el puerto del entorno o usar 5001 por defecto
     port = int(os.environ.get('PORT', 5001))
-    # En producción, debug debe ser False
-    debug = os.environ.get('FLASK_ENV') != 'production'
-    app.run(debug=debug, host='0.0.0.0', port=port)
+    app.run(debug=os.environ.get('FLASK_ENV') != 'production', host='0.0.0.0', port=port)
